@@ -264,9 +264,179 @@ class FTPClient:
             print("Error al establecer la conexión activa.")
     
 
+    def type_(self, mode):
+        """Establece el modo de transferencia de datos (ASCII o BINARY)."""
+        if mode.upper() not in ['A', 'I']:
+            raise ValueError("El modo debe ser 'ASCII' o 'BINARY'")
+        response = self.send_command(f'TYPE {mode.upper()}')
+        self.type = mode.upper()
+        print(self.type)
+        return response
+    
+    def appe(self, server_filename, data):
+        # Conectar pasivamente para enviar los datos
+        data_socket = self.pasv()
+        if data_socket is None:
+            print("Error al establecer el modo pasivo")
+            return
+        try:
+            ans = self.send_command(f'APPE {server_filename}')
+            print(ans)
 
+            if ans.startswith('150'):
+                # Enviar los datos especificados
+                data_socket.sendall(data.encode('utf-8'))
+                data_socket.close()
+                return self.read_server_response()
+            else:
+                print("Permisos insuficientes o error en la operación")
+        finally:
+            # Asegurarse de que el socket de datos se cierre correctamente
+            data_socket.close()
+
+
+        
+       
+
+    def stou(self, filepath, prefix=''):
+        """Envía un archivo al servidor FTP y solicita que el servidor genere un nombre de archivo único.
+        
+        Args:
+            filepath (str): Ruta del archivo local a enviar.
+            prefix (str, optional): Prefijo para el nombre del archivo generado por el servidor. Defaults to ''.
+        
+        Returns:
+            str: Respuesta del servidor FTP.
+        """
+        # Verificar si el archivo existe
+        if not os.path.exists(filepath):
+            print(f"La ruta {filepath} no es una ruta válida.")
+            return
+        
+        if self.type is None:
+            print('No se ha establecido un tipo de transferencia')
+            return 
+        elif self.type == 'A':
+            r_mode = 'r'
+        else:
+            r_mode = 'rb'
+
+        # Extraer el nombre del archivo de la ruta completa
+        filename = os.path.basename(filepath)
+
+        # Conectar pasivamente para enviar el archivo
+        data_socket = self.pasv()
+        if data_socket is None:
+            print("Error al establecer el modo pasivo")
+            return
+
+        try:
+            # Enviar el comando STOU con el prefijo especificado
+            ans = self.send_command(f'STOU {prefix}{filename}')
+            print(ans)
+
+            # Abrir el archivo en modo binario para leer y enviar su contenido
+            with open(filepath, r_mode) as file:
+                while True:
+                    chunk = file.read(self.buffer_size)
+                    if not chunk:
+                        break # Se sale del bucle cuando no hay más datos para enviar
+                    data_socket.sendall(chunk)
+        finally:
+            # Asegurarse de que el socket de datos se cierre correctamente
+            data_socket.close()
+
+        # Leer y retornar la respuesta del servidor
+        return self.read_server_response()
+    
+    def allo(self, size):
+        """Indica al servidor FTP que el cliente está listo para recibir datos."""
+        response = self.send_command(f'ALLO {size}')
+        return response
+
+    def rest(self, position):
+        """Especifica un punto de inicio para la transferencia de datos."""
+        response = self.send_command(f'REST {position}')
+        return response
+    
+    def rnfr(self, filename):
+        """Inicia el proceso de renombrar un archivo en el servidor FTP."""
+        return self.send_command(f'RNFR {filename}')
+
+    def rnto(self, new_filename):
+        """Completa el proceso de renombrar un archivo en el servidor FTP."""
+        return self.send_command(f'RNTO {new_filename}')
+
+    def abor(self):
+        """Cancela el comando actual en el servidor FTP."""
+        return self.send_command('ABOR')
+
+    def nlst(self):
+        """Lista los nombres de los archivos en el directorio actual del servidor FTP."""
+        data_socket = self.pasv()
+        if data_socket is None:
+            print("Error al establecer el modo pasivo")
+            return ""
+        
+        try:
+            self.send_command('NLST')
+            data = b''
+            while True:
+                try:
+                    chunk = data_socket.recv(self.buffer_size)
+                    if not chunk:
+                        break
+                    data += chunk
+                except socket.timeout:
+                    break
+            print(self.read_server_response())
+        finally:
+            data_socket.close()
+    
+        decoded_data = data.decode('utf-8')
+        return decoded_data
+
+    def site(self, command):
+        """Envía un comando específico del sitio al servidor FTP."""
+        return self.send_command(f'SITE {command}')
+
+    def syst(self):
+        """Solicita información del sistema operativo del servidor FTP."""
+        return self.send_command('SYST')
+
+    def stat(self, filename=None):
+        """Solicita el estado del servidor FTP o de un archivo específico."""
+        if filename:
+            return self.send_command(f'STAT {filename}')
+        else:
+            return self.send_command('STAT')
+    
+    def help(self, command=None):
+        """Solicita ayuda sobre un comando específico o sobre el servicio FTP en general."""
+        if command:
+            print(self.send_command(f'HELP {command}'))
+            return self.read_server_response()
+        else:
+            print(self.send_command('HELP')) 
+            # return self.send_command('HELP')
+            return self.read_server_response()
+
+    def stru(self, structure):
+        """Establece la estructura de datos para la transferencia (FILE o RECORD)."""
+        if structure.upper() not in ['F', 'R', 'P']:
+            raise ValueError("La estructura debe ser 'F' para FILE o 'R' para RECORD")
+        response = self.send_command(f'STRU {structure.upper()}')
+        return response
+    
+    def noop(self):
+        """Envía un comando NOOP al servidor FTP, que no hace nada pero es útil para mantener la conexión activa."""
+        return self.send_command('NOOP')
+    
     def quit(self):
-        return self.send_command('QUIT')
+        ans = self.send_command('QUIT')
+        if not self.socket is None:
+            self.socket.close()
+        return ans
 
     def close(self):
         self.socket.close()
@@ -296,54 +466,93 @@ if __name__ == "__main__":
 
     while True:
         try:
+
             user_input = input("ftp>> ")
 
             command_parts = user_input.strip().split(" ")
             command = command_parts[0].lower()
             args = command_parts[1:]
+            for nombre in args:
+                print(nombre)
 
-            print(f'com{command} args{args}')
 
+
+            print(f'com{command} ')
+            
             if command == 'user':
                 print(client.user(*args))
             elif command == 'pass':
                 print(client.pass_(*args))
-            elif command == 'pasv':
-                print(client.pasv(*args))
-            elif command == 'mkd':
-                print(client.mkd())
-            elif command == 'list':
-                print(client.list_files())
-            elif command == 'retr':
-                print(client.retr(' '.join(args)))
-            elif command == 'stor':
-                print(client.stor(*args))
+            # elif command == 'acct':
+            #     print(client.acct(*args))
             elif command == 'cwd':
                 print(client.cwd(*args))
-            elif command == 'pwd':
-                print(client.pwd())
-            elif command == 'mkd':
-                print(client.mkd(*args))
-            elif command == 'dele':
-                print(client.dele(*args))
-            elif command == 'rmd':
-                print(client.rmd(*args))
-            elif command == 'acct':
-                print(client.acct(*args))
             elif command == 'cdup':
                 print(client.cdup())
-            elif command == 'smnt':
-                print(client.smnt(*args))
+            # elif command == 'smnt':
+            #     print(client.smnt(*args))
+            elif command == 'quit':
+                print(client.quit())
+                break
             elif command == 'rein':
                 print(client.rein())
             elif command == 'port':
                 print(client.active_mode(*args))
-            elif command == 'quit':
-                print(client.quit(*args))
-                break
+            elif command == 'pasv':
+                print(client.pasv())
+            elif command == 'type':
+                print(client.type_(*args))
+            #Probar en otro servidor
+            elif command == 'stru':
+                print(client.stru(*args))
+            elif command == 'retr':
+                print(client.retr(*args))
+            elif command == 'stor':
+                print(client.stor(*args))
+            elif command == 'stou':
+                print(client.stou(*args))
+            elif command == 'appe':
+                print(client.appe(*args))
+            elif command == 'allo':
+                print(client.allo(*args))
+            elif command == 'rest':
+                print(client.rest(*args))
+            elif command == 'rnfr':
+                print(client.rnfr(*args))
+            elif command == 'rnto':
+                print(client.rnto(*args))
+            elif command == 'abor':
+                #OJO HILOS
+                print(client.abor(*args))
+            elif command == 'dele':
+                print(client.dele(*args))
+            elif command == 'rmd':
+                print(client.rmd(*args))
+            elif command == 'mkd':
+                print(client.mkd(*args))
+            elif command == 'pwd':
+                print(client.pwd())
+            elif command == 'list':
+                print(client.list_files())
+            elif command == 'nlst':
+                print(client.nlst())
+            elif command == 'site':
+                print(client.site(*args))
+            elif command == 'syst':
+                print(client.syst())
+            elif command == 'stat':
+                print(client.stat(*args))
+            elif command == 'help':
+                print(client.help(*args))
+            elif command == 'noop':
+                print(client.noop())
             else:
                 print("Comando no reconocido. Por favor, inténtelo de nuevo.")
         except Exception as e:
             print(f"Error: {e}")
+
+            
+            
+            
 
 
